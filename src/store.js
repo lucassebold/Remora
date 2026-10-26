@@ -3,7 +3,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const FILE = path.join(__dirname, '..', 'data', 'state.json');
+// DATA_DIR lets you point to a persistent disk (e.g. a Railway Volume). Without it, data lives in ./data and is lost on redeploy.
+const FILE = path.join(process.env.DATA_DIR || path.join(__dirname, '..', 'data'), 'state.json');
 let data = { strategies: [] };
 let timer = null;
 
