@@ -1,0 +1,11 @@
+{
+  "name": "cardume",
+  "version": "0.1.0",
+  "description": "Terminal de estrategias para Solana: regras legiveis, simulacao com precos reais",
+  "main": "src/server.js",
+  "private": true,
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node test/run.js"
+  }
+}
