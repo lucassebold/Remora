@@ -14,7 +14,9 @@ const orders = require('./orders');
 const jup = require('./jupiter');
 
 const PORT = Number(process.env.PORT) || 3000;
-const HOST = process.env.HOST || '127.0.0.1';
+// Local: only this computer (there is no login). On Railway the platform must reach the app, so it listens on all interfaces.
+const ON_RAILWAY = !!(process.env.RAILWAY_ENVIRONMENT || process.env.RAILWAY_PROJECT_ID);
+const HOST = process.env.HOST || (ON_RAILWAY ? '0.0.0.0' : '127.0.0.1');
 const TICK_MS = Number(process.env.TICK_MS) || 15000;
 const PUB = path.join(__dirname, '..', 'public');
 const MINT_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
