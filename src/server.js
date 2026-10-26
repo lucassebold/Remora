@@ -1,5 +1,5 @@
 'use strict';
-// Servidor local: API + arquivos estaticos + loop do motor. Sem login: escuta so em 127.0.0.1 por padrao.
+// Server: API + static files + engine loop. Browsing is open; strategies and orders require a wallet sign-in (auth.js).
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -12,6 +12,7 @@ const compiler = require('./compiler');
 const store = require('./store');
 const orders = require('./orders');
 const jup = require('./jupiter');
+const auth = require('./auth');
 
 const PORT = Number(process.env.PORT) || 3000;
 // Local: only this computer (there is no login). On Railway the platform must reach the app, so it listens on all interfaces.
@@ -39,6 +40,34 @@ function view(s) {
     rules: s.rules.map(function (r) { return Object.assign({}, r, { text: rules.describe(r), state: s.state.rs[r.id] || { status: 'armed', fired: 0 } }); }),
     summary: engine.summary(s), log: s.state.log.slice(0, 60), fills: s.state.fills.slice(0, 40), judge: s.state.lastJudge || null,
     lastTick: s.state.lastTick, last: s.state.last };
+}
+
+// ---- who is calling? The wallet address inside a valid sign-in token (see auth.js) ----
+function callerAddress(req) {
+  const m = String(req.headers.authorization || '').match(/^Bearer (.+)$/);
+  return m ? auth.verifyToken(m[1]) : null;
+}
+function clientIp(req) {
+  const f = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return f || (req.socket && req.socket.remoteAddress) || 'unknown';
+}
+// Tiny in-memory rate limiter (per IP and action): protects the AI quota and the public RPC.
+const hits = {};
+function limited(req, name, max, windowMs) {
+  const k = name + '|' + clientIp(req), t = Date.now();
+  const a = (hits[k] || []).filter(function (x) { return t - x < windowMs; });
+  a.push(t); hits[k] = a;
+  if (Object.keys(hits).length > 5000) Object.keys(hits).forEach(function (key) { const h = hits[key]; if (!h.length || t - h[h.length - 1] > 3600000) delete hits[key]; });
+  return a.length > max;
+}
+function tooMany(res) { return send(res, 429, { error: 'Too many requests. Please wait a few minutes and try again.' }); }
+// Returns { s, addr } for a strategy owned by the caller, or answers the request itself and returns null.
+function mine(req, res, id) {
+  const addr = callerAddress(req);
+  if (!addr) { send(res, 401, { error: 'Sign in with your wallet to continue', code: 'auth' }); return null; }
+  const s = store.get(id);
+  if (!s || s.owner !== addr) { send(res, 404, { error: 'Strategy not found' }); return null; } // 404 also for other people's strategies
+  return { s: s, addr: addr };
 }
 
 let marketH24 = null;
@@ -72,7 +101,19 @@ async function tickAll() {
 async function api(req, res, u) {
   const p = u.pathname, q = u.searchParams, m = req.method;
   let x;
-  if (m === 'GET' && p === '/api/health') return send(res, 200, { ok: true, compiler: compiler.available(), provider: compiler.provider(), tickMs: TICK_MS, limits: orders.limits() });
+  if (m === 'GET' && p === '/api/health') return send(res, 200, { ok: true, compiler: compiler.available(), provider: compiler.provider(), tickMs: TICK_MS, limits: orders.limits(), auth: true });
+  if (m === 'POST' && p === '/api/auth/challenge') {
+    if (limited(req, 'auth', 30, 60000)) return tooMany(res);
+    const b = await readBody(req);
+    if (!MINT_RE.test(b.address || '')) return send(res, 400, { error: 'Invalid wallet address' });
+    try { return send(res, 200, auth.challenge(b.address)); } catch (e) { return send(res, 400, { error: 'Invalid wallet address' }); }
+  }
+  if (m === 'POST' && p === '/api/auth/verify') {
+    if (limited(req, 'auth', 30, 60000)) return tooMany(res);
+    const b = await readBody(req);
+    try { return send(res, 200, auth.login(String(b.address || ''), String(b.message || ''), String(b.signature || ''))); }
+    catch (e) { return send(res, 401, { error: e.message }); }
+  }
   if (m === 'GET' && p === '/api/trending') return send(res, 200, await market.trending());
   if (m === 'GET' && p === '/api/search') {
     const t = (q.get('q') || '').trim();
@@ -89,6 +130,7 @@ async function api(req, res, u) {
   }
   if (m === 'GET' && (x = p.match(/^\/api\/wallet\/(\w+)$/))) {
     if (!MINT_RE.test(x[1])) return send(res, 400, { error: 'Invalid wallet address' });
+    if (limited(req, 'wallet', 60, 60000)) return tooMany(res);
     return send(res, 200, await market.wallet(x[1]));
   }
   if (m === 'GET' && p === '/api/bars') {
@@ -107,6 +149,7 @@ async function api(req, res, u) {
     }));
   }
   if (m === 'POST' && p === '/api/compile') {
+    if (limited(req, 'compile', 20, 10 * 60000)) return tooMany(res); // protects the AI quota; browsing stays open without sign-in
     const b = await readBody(req);
     if (!MINT_RE.test(b.mint || '')) return send(res, 400, { error: 'Invalid token' });
     const s = await market.snapshots([b.mint]);
@@ -116,8 +159,14 @@ async function api(req, res, u) {
       return send(res, 200, { name: out.name, mode: out.mode, assumptions: out.assumptions || [], rules: out.rules.map(function (r) { return Object.assign({}, r, { text: rules.describe(r) }); }) });
     } catch (e) { return send(res, 422, { error: e.message }); }
   }
-  if (m === 'GET' && p === '/api/strategies') return send(res, 200, store.all().map(view));
+  if (m === 'GET' && p === '/api/strategies') {
+    const addr = callerAddress(req);
+    if (!addr) return send(res, 401, { error: 'Sign in with your wallet to see your strategies', code: 'auth' });
+    return send(res, 200, store.all().filter(function (s) { return s.owner === addr; }).map(view));
+  }
   if (m === 'POST' && p === '/api/strategies') {
+    const addr = callerAddress(req);
+    if (!addr) return send(res, 401, { error: 'Sign in with your wallet to start a strategy', code: 'auth' });
     const b = await readBody(req);
     if (!MINT_RE.test(b.mint || '')) return send(res, 400, { error: 'Invalid token' });
     const v = rules.validate(b.rules);
@@ -130,39 +179,39 @@ async function api(req, res, u) {
     const live = b.live === true;
     if (live) {
       const lim = orders.limits();
-      if (!MINT_RE.test(b.wallet || '')) return send(res, 400, { error: 'Connect your wallet to trade live' });
+      if (b.wallet && b.wallet !== addr) return send(res, 403, { error: 'Live strategies must use the wallet you signed in with' });
       if (lim.maxBudgetUsd && params.budget > lim.maxBudgetUsd) return send(res, 422, { error: 'The maximum live budget is $' + lim.maxBudgetUsd + ' (LIVE_MAX_BUDGET_USD)' });
       if (lim.maxOrderUsd && params.maxPerTrade > lim.maxOrderUsd) return send(res, 422, { error: 'The maximum live order size is $' + lim.maxOrderUsd + ' (LIVE_MAX_USD_PER_ORDER)' });
       if (!params.maxLoss) return send(res, 422, { error: 'Live strategies need a max loss greater than zero' });
       params.startWithPosition = 0;
     }
-    const s = { id: crypto.randomBytes(4).toString('hex'), name: String(b.name || 'Estrategia').slice(0, 60), mint: b.mint, symbol: snap.symbol, status: 'active', live: live, wallet: live ? b.wallet : null, params: params, rules: v.rules, createdAt: Date.now(), state: engine.newState(params.budget, snap.price, params.startWithPosition) };
+    const s = { id: crypto.randomBytes(4).toString('hex'), name: String(b.name || 'Strategy').slice(0, 60), mint: b.mint, symbol: snap.symbol, status: 'active', owner: addr, live: live, wallet: live ? addr : null, params: params, rules: v.rules, createdAt: Date.now(), state: engine.newState(params.budget, snap.price, params.startWithPosition) };
     store.add(s);
     engine.tick(s, snap, { marketH24: marketH24 });
     store.save();
     return send(res, 201, view(s));
   }
   if (m === 'POST' && (x = p.match(/^\/api\/strategies\/(\w+)\/manual$/))) {
-    const st = store.get(x[1]);
-    if (!st) return send(res, 404, { error: 'Strategy not found' });
+    const own = mine(req, res, x[1]); if (!own) return;
+    const st = own.s;
     const b = await readBody(req);
-    try { orders.manual(st, b.wallet, b.side, b.pct); store.save(); return send(res, 200, view(st)); }
+    try { orders.manual(st, own.addr, b.side, b.pct); store.save(); return send(res, 200, view(st)); }
     catch (e) { return send(res, 422, { error: e.message }); }
   }
   if (m === 'POST' && (x = p.match(/^\/api\/strategies\/(\w+)\/orders\/(\w+)\/(prepare|submitted|decline)$/))) {
-    const st = store.get(x[1]);
-    if (!st) return send(res, 404, { error: 'Strategy not found' });
+    const own = mine(req, res, x[1]); if (!own) return;
+    const st = own.s;
     const b = await readBody(req);
     try {
-      if (x[3] === 'prepare') return send(res, 200, await orders.prepare(st, x[2], b.wallet, { market: market, jup: jup }));
-      if (x[3] === 'decline') { orders.decline(st, x[2], b.wallet); store.save(); return send(res, 200, view(st)); }
-      orders.submitted(st, x[2], b.wallet, b.signature, { market: market }, function () { store.save(); });
+      if (x[3] === 'prepare') return send(res, 200, await orders.prepare(st, x[2], own.addr, { market: market, jup: jup }));
+      if (x[3] === 'decline') { orders.decline(st, x[2], own.addr); store.save(); return send(res, 200, view(st)); }
+      orders.submitted(st, x[2], own.addr, b.signature, { market: market }, function () { store.save(); });
       store.save(); return send(res, 200, view(st));
     } catch (e) { store.save(); return send(res, e.expose ? 422 : 502, { error: e.message }); }
   }
   if ((x = p.match(/^\/api\/strategies\/(\w+)(?:\/(pause|resume))?$/))) {
-    const s = store.get(x[1]);
-    if (!s) return send(res, 404, { error: 'Strategy not found' });
+    const own = mine(req, res, x[1]); if (!own) return;
+    const s = own.s;
     if (m === 'GET') return send(res, 200, view(s));
     if (m === 'DELETE') { store.remove(s.id); return send(res, 200, { ok: true }); }
     if (m === 'POST' && x[2]) { s.status = x[2] === 'pause' ? 'paused' : 'active'; store.save(); return send(res, 200, view(s)); }
@@ -186,9 +235,12 @@ const server = http.createServer(function (req, res) {
 });
 
 store.load();
+// Strategies saved before sign-in existed: live ones belong to their wallet; old paper ones have no owner and stay hidden.
+store.all().forEach(function (s) { if (!s.owner && s.wallet) s.owner = s.wallet; });
 server.listen(PORT, HOST, function () {
   console.log('Cardume at http://' + HOST + ':' + PORT + '  (paper trading by default; live orders need your wallet approval)');
   console.log('AI strategy builder: ' + (compiler.available() ? 'on (' + compiler.provider() + ')' : 'off (set GEMINI_API_KEY to enable)'));
+  if (auth.ephemeralSecret) console.log('Note: SESSION_SECRET is not set, so everyone is signed out whenever the server restarts. Set a long random SESSION_SECRET.');
   setInterval(tickAll, TICK_MS);
   tickAll();
 });

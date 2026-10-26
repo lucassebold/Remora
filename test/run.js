@@ -157,5 +157,6 @@ t('modo simples entende frases e rejeita o que nao entende', function () {
   } catch (e) { process.exitCode = 1; console.log('FALHA caminho da IA\n     ' + e.message); }
   http.postJson = real; http.getJson = realGet; delete process.env.GEMINI_API_KEY; delete process.env.GEMINI_RETRY_MS;
   passed += await require('./live_tests').run();
+  passed += await require('./auth_tests').run();
   console.log('\n' + passed + ' testes passaram');
 })();

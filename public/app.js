@@ -24,9 +24,16 @@ function short(m) { return m.slice(0, 4) + '...' + m.slice(-4); }
 function store(k, v) { try { if (v === undefined) return sessionStorage.getItem(k); if (v === null) sessionStorage.removeItem(k); else sessionStorage.setItem(k, v); } catch (e) { /* storage blocked */ } return null; }
 
 async function api(path, opts) {
+  opts = Object.assign({}, opts);
+  const sess = getSession();
+  if (sess) opts.headers = Object.assign({ authorization: 'Bearer ' + sess.token }, opts.headers || {});
   const r = await fetch(path, opts);
   let j = null; try { j = await r.json(); } catch (e) { /* no body */ }
-  if (!r.ok) throw new Error((j && j.error) || 'Error ' + r.status);
+  if (!r.ok) {
+    const err = new Error((j && j.error) || 'Error ' + r.status);
+    if (r.status === 401 && j && j.code === 'auth') { err.code = 'auth'; if (sess) clearSession(); }
+    throw err;
+  }
   return j;
 }
 function post(path, body) { return api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body || {}) }); }
@@ -65,10 +72,15 @@ const WALLETS = [
   { id: 'backpack', name: 'Backpack', get: function () { return window.backpack && window.backpack.isBackpack ? window.backpack : null; }, url: 'https://backpack.app/download' }
 ];
 const W = { id: null, provider: null, address: null };
+// Sign-in session (wallet signature -> token). Stored in the browser; the server keeps nothing.
+function getSession() { try { const x = JSON.parse(localStorage.getItem('cardume_session') || 'null'); return x && x.token && x.expiresAt > Date.now() ? x : null; } catch (e) { return null; } }
+function setSession(x) { try { localStorage.setItem('cardume_session', JSON.stringify({ token: x.token, address: x.address, expiresAt: x.expiresAt })); } catch (e) { /* storage blocked */ } walletLabel(); }
+function clearSession() { try { localStorage.removeItem('cardume_session'); } catch (e) { /* storage blocked */ } walletLabel(); }
 function walletLabel() {
-  const b = $('#walletBtn');
-  b.textContent = W.address ? short(W.address) : 'Connect wallet';
-  b.classList.toggle('on', !!W.address);
+  const b = $('#walletBtn'), sess = getSession();
+  b.textContent = sess ? short(sess.address) : 'Sign in';
+  b.classList.toggle('on', !!sess);
+  b.classList.toggle('primary', !sess);
 }
 function setWallet(id, provider, address) {
   W.id = id; W.provider = provider; W.address = address;
@@ -96,28 +108,68 @@ async function autoConnect() {
   if (!p) return;
   try { const r = await p.connect({ onlyIfTrusted: true }); const pk = (r && r.publicKey) || p.publicKey; if (pk) setWallet(id, p, pk.toString()); } catch (e) { /* not authorized yet */ }
 }
-$('#walletBtn').addEventListener('click', function () { location.hash = '#/wallet'; });
+$('#walletBtn').addEventListener('click', function () { if (getSession()) location.hash = '#/wallet'; else loginModal('Sign in to start strategies and see your own.'); });
+
+// Connect the wallet (if needed), sign a free message and get a session. Nothing is sent on-chain.
+async function loginWith(id) {
+  if (!W.address || W.id !== id) await connectWallet(id);
+  const provider = W.provider, address = W.address;
+  if (!provider.signMessage) throw new Error('This wallet cannot sign messages');
+  const c = await post('/api/auth/challenge', { address: address });
+  const r = await provider.signMessage(new TextEncoder().encode(c.message), 'utf8');
+  const bytes = r && r.signature ? r.signature : r;
+  const sig = btoa(String.fromCharCode.apply(null, Array.prototype.slice.call(bytes)));
+  setSession(await post('/api/auth/verify', { address: address, message: c.message, signature: sig }));
+}
+async function signOut() { clearSession(); await disconnectWallet(); toast('Signed out'); route(); }
+function walletOptions() {
+  return '<div class="wlist">' + WALLETS.map(function (w) {
+    return w.get() ? '<button class="wopt" data-w="' + w.id + '"><b>' + w.name + '</b><span class="up">Sign in</span></button>'
+      : '<a class="wopt off" href="' + w.url + '" target="_blank" rel="noopener"><b>' + w.name + '</b><span class="muted">not installed · download</span></a>';
+  }).join('') + '</div>' + (WALLETS.some(function (w) { return w.get(); }) ? '' : '<div class="note">No Solana wallet detected. Install a browser extension (for example Phantom), refresh the page and try again.</div>');
+}
+function loginErr(e) { return e.code === 4001 || /reject|denied|declin|cancel/i.test(e.message) ? 'Sign-in cancelled in the wallet' : e.message; }
+function loginModal(reason) {
+  return new Promise(function (resolve) {
+    const ov = document.createElement('div'); ov.className = 'overlay';
+    ov.innerHTML = '<div class="modal"><h3 style="margin:0 0 4px">Sign in with your wallet</h3><div class="note" style="margin-bottom:10px">' + esc(reason || 'Sign in to continue.') + ' You will sign a message in your wallet. It is free, moves no funds and takes a few seconds.</div>' + walletOptions() +
+      '<div class="row" style="margin-top:12px"><button class="btn" id="lc">Cancel</button></div></div>';
+    document.body.appendChild(ov);
+    function done(ok) { ov.remove(); resolve(ok); }
+    $('#lc', ov).onclick = function () { done(false); };
+    ov.addEventListener('click', function (e) { if (e.target === ov) done(false); });
+    ov.querySelectorAll('[data-w]').forEach(function (b) { b.onclick = async function () {
+      b.disabled = true;
+      try { await loginWith(b.dataset.w); toast('Signed in'); done(true); } catch (e) { toast(loginErr(e), true); b.disabled = false; }
+    }; });
+  });
+}
+function ensureLogin(reason, needWallet) {
+  const s = getSession();
+  if (s && (!needWallet || W.address)) return Promise.resolve(true);
+  return loginModal(reason);
+}
+function signInPrompt(text) { return '<div class="empty"><p style="margin:0 0 10px">' + esc(text) + '</p><button class="btn primary" data-signin>Sign in with wallet</button></div>'; }
+function wireSignIn(root, then) { root.querySelectorAll('[data-signin]').forEach(function (b) { b.onclick = async function () { if (await ensureLogin('Sign in to see your strategies.')) then(); }; }); }
 
 async function pageWallet() {
   const installed = WALLETS.filter(function (w) { return w.get(); });
-  if (!W.address) {
-    view.innerHTML = '<div class="wrap" style="max-width:560px"><div class="sec-title">Wallet</div><div class="card"><b>Connect your wallet</b>' +
-      '<p class="muted">Connecting only shows your address and balance. ' + BRAND + ' <b>never asks you to sign</b> when you connect, cannot move your funds and never sees your private key. You can disconnect at any time.</p>' +
-      '<div class="wlist">' + WALLETS.map(function (w) {
-        const ok = !!w.get();
-        return ok ? '<button class="wopt" data-w="' + w.id + '"><b>' + w.name + '</b><span class="up">Connect</span></button>'
-          : '<a class="wopt off" href="' + w.url + '" target="_blank" rel="noopener"><b>' + w.name + '</b><span class="muted">not installed · download</span></a>';
-      }).join('') + '</div>' + (installed.length ? '' : '<div class="note">No Solana wallet detected. Install a browser extension (for example Phantom), refresh the page and come back.</div>') + '</div></div>';
+  if (!getSession() || !W.address) {
+    const sess = getSession();
+    view.innerHTML = '<div class="wrap" style="max-width:560px"><div class="sec-title">Wallet</div><div class="card"><b>' + (sess ? 'Reconnect your wallet' : 'Sign in with your wallet') + '</b>' +
+      '<p class="muted">' + (sess ? 'You are signed in as ' + esc(short(sess.address)) + ', but this browser has not connected the wallet yet. Connect it to review and sign orders.' : 'Browsing is open to everyone. Sign in only when you want to start strategies or see your own.') + ' ' + BRAND + ' <b>never asks for your private key</b> and cannot move your funds. Signing in is a free message signature.</p>' +
+      walletOptions() + (sess ? '<div class="row" style="margin-top:10px"><button class="btn" id="so">Sign out</button></div>' : '') + '</div></div>';
     view.querySelectorAll('[data-w]').forEach(function (b) { b.onclick = async function () {
       b.disabled = true;
-      try { await connectWallet(b.dataset.w); toast('Wallet connected'); route(); } catch (e) { toast(e.code === 4001 || /reject|denied|User/i.test(e.message) ? 'Connection rejected in the wallet' : e.message, true); b.disabled = false; }
+      try { await loginWith(b.dataset.w); toast('Signed in'); route(); } catch (e) { toast(loginErr(e), true); b.disabled = false; }
     }; });
+    if ($('#so')) $('#so').onclick = signOut;
     return;
   }
-  view.innerHTML = '<div class="wrap" style="max-width:760px"><div class="row" style="margin:20px 0 6px"><div><h2 style="margin:0">Wallet connected</h2><div class="muted">' + esc(WALLETS.filter(function (w) { return w.id === W.id; }).map(function (w) { return w.name; })[0] || '') + '</div></div>' +
-    '<div><button class="btn" id="wr">Refresh</button> <button class="btn danger" id="wd">Disconnect</button></div></div>' +
+  view.innerHTML = '<div class="wrap" style="max-width:760px"><div class="row" style="margin:20px 0 6px"><div><h2 style="margin:0">Signed in</h2><div class="muted">' + esc(WALLETS.filter(function (w) { return w.id === W.id; }).map(function (w) { return w.name; })[0] || '') + '</div></div>' +
+    '<div><button class="btn" id="wr">Refresh</button> <button class="btn danger" id="wd">Sign out</button></div></div>' +
     '<div class="card"><span class="muted">Address</span><div class="mono addr">' + esc(W.address) + '</div></div><div id="wb" class="empty">Reading balance from the network...</div></div>';
-  $('#wd').onclick = async function () { await disconnectWallet(); toast('Wallet disconnected'); route(); };
+  $('#wd').onclick = signOut;
   async function load() {
     try {
       const d = await api('/api/wallet/' + W.address);
@@ -224,7 +276,8 @@ async function pageToken(mint) {
   }
   async function tabMine() {
     $('#tb').innerHTML = '<div class="empty">Loading...</div>';
-    const all = await api('/api/strategies'); const mine = all.filter(function (x) { return x.mint === mint; });
+    let all; try { all = await api('/api/strategies'); } catch (e) { if (e.code === 'auth') { $('#tb').innerHTML = signInPrompt('Sign in to see your strategies.'); wireSignIn($('#tb'), tabMine); return; } throw e; }
+    const mine = all.filter(function (x) { return x.mint === mint; });
     $('#tb').innerHTML = mine.length ? '<div class="cards">' + mine.map(stratCard).join('') + '</div>' : '<div class="empty">You have no strategies for this token yet.</div>';
   }
   tabRisk();
@@ -268,8 +321,7 @@ async function buildPanel(s) {
       (draft.fields && draft.fields.length ? draft.fields.map(function (f) { return '<label class="field"><span>' + esc(f.label) + '</span><input data-f="' + f.key + '" value="' + esc(draft.values[f.key]) + '"></label>'; }).join('') : '') +
       '<div class="grid3"><label class="field"><span>Budget $</span><input id="pb" value="' + p.budget + '"></label><label class="field"><span>Max per order $</span><input id="pm" value="' + p.maxPerTrade + '"></label><label class="field"><span>Max loss $</span><input id="pl" value="' + p.maxLoss + '"></label></div>' +
       '<div class="note">Rules can never go beyond these limits. Paper trading uses a simulated 0.5% fee per order.</div>' +
-      (W.address ? '<label class="livebox"><input type="checkbox" id="live"><span><b>Trade with real money</b><br><span class="muted">Uses wallet ' + short(W.address) + '. Every order waits for your review and your signature in the wallet.' + caps + '</span></span></label>'
-        : '<div class="note" style="margin-top:8px">Want to trade for real? Connect your wallet (button at the top).</div>') +
+      '<label class="livebox"><input type="checkbox" id="live"><span><b>Trade with real money</b><br><span class="muted">' + (W.address ? 'Uses wallet ' + short(W.address) + '. ' : 'You will sign in with your wallet first. ') + 'Every order waits for your review and your signature in the wallet.' + caps + '</span></span></label>' +
       '<button class="btn primary" id="go" style="width:100%;margin-top:10px">Start paper trading</button>';
     $('#go').onclick = start;
     const lv = $('#live');
@@ -292,6 +344,9 @@ async function buildPanel(s) {
   }
   async function start() {
     const live = !!($('#live') && $('#live').checked);
+    // Login is asked only now, when the person actually starts a strategy.
+    if (!(await ensureLogin(live ? 'Sign in to trade with your wallet.' : 'Sign in to start your strategy.', live))) return;
+    if (live && getSession().address !== W.address) return toast('The connected wallet is not the one you signed in with. Sign out and sign in again.', true);
     if (live && !confirm('You are about to trade with REAL MONEY from wallet ' + short(W.address) + '.\n\nEvery order only goes out after you review it and sign in your wallet, and you can decline it. Memecoins can lose all of their value.\n\nContinue?')) return;
     const btn = $('#go'); btn.disabled = true;
     try {
@@ -352,9 +407,9 @@ async function pageStrategies() {
   view.innerHTML = '<div class="wrap"><div class="sec-title">My strategies</div><div id="sl" class="empty">Loading...</div></div>';
   async function load() {
     try { const l = await api('/api/strategies'); $('#sl').className = ''; $('#sl').innerHTML = l.length ? '<div class="cards">' + l.map(stratCard).join('') + '</div>' : '<div class="empty">No strategies yet. <a href="#/" class="up">Describe one and let AI build it.</a></div>'; }
-    catch (e) { $('#sl').innerHTML = esc(e.message); }
+    catch (e) { if (e.code === 'auth') { $('#sl').className = ''; $('#sl').innerHTML = signInPrompt('Sign in with your wallet to see your strategies.'); wireSignIn($('#sl'), load); } else $('#sl').innerHTML = esc(e.message); }
   }
-  load(); every(load, 8000);
+  load(); every(function () { if (getSession()) load(); }, 8000);
 }
 
 /* ---------- live orders: review and sign in the wallet ---------- */
@@ -431,7 +486,7 @@ function showOrderModal(s, o, prep) {
 async function pageStrategy(id) {
   view.innerHTML = '<div class="wrap"><div id="sd" class="empty" style="margin-top:20px">Loading...</div></div>';
   async function load() {
-    let s; try { s = await api('/api/strategies/' + id); } catch (e) { $('#sd').innerHTML = esc(e.message); return; }
+    let s; try { s = await api('/api/strategies/' + id); } catch (e) { if (e.code === 'auth') { $('#sd').className = ''; $('#sd').innerHTML = signInPrompt('Sign in with your wallet to open this strategy.'); wireSignIn($('#sd'), load); } else $('#sd').innerHTML = esc(e.message); return; }
     const m = s.summary, nextIn = s.lastTick ? Math.max(0, 15 - Math.round((Date.now() - s.lastTick) / 1000)) : null;
     const j = s.judge && s.judge.probs;
     $('#sd').className = '';
@@ -468,14 +523,14 @@ function pageHow() {
   const L = function (name, text) { return '<div class="kv"><b class="mono">' + name + '</b><span>' + text + '</span></div>'; };
   view.innerHTML = '<div class="wrap how">' +
     '<div class="howhead"><span class="aibadge">' + SPARK + ' How it works</span><h1>From a sentence to a running strategy.</h1>' +
-    '<p>' + BRAND + ' lets you describe a trading idea in plain English, turns it into rules you can read, tests it on live prices, and trades from your own wallet. You stay in control of every order.</p>' +
+    '<p>' + BRAND + ' lets you describe a trading idea in plain English, turns it into rules you can read, tests it on live prices, and trades from your own wallet. You stay in control of every order. Browsing is open: you only sign in when you start a strategy.</p>' +
     '<div class="row" style="justify-content:flex-start;gap:10px"><a class="btn primary" href="#/">' + SPARK + ' Build a strategy</a><a class="btn" href="#/strategies">My strategies</a></div></div>' +
 
     '<div class="sec-title">The four steps</div><div class="howgrid">' +
     '<div class="card"><span class="num">1</span><h3>Describe</h3><p class="muted">Tell the AI what you want, for example: <i>Buy $50 every hour under $0.40. If it drops 25% from the peak, sell everything.</i> Missing details are filled with sensible defaults, and the AI tells you exactly what it assumed. Prefer not to write? Start from a template.</p></div>' +
     '<div class="card"><span class="num">2</span><h3>Review</h3><p class="muted">The AI never trades. It only writes rules from a fixed library, shown as <b>when / if / then</b>. You read them, then set your budget, the maximum per order and the maximum loss. Rules can never go beyond those limits.</p></div>' +
     '<div class="card"><span class="num">3</span><h3>Paper trade</h3><p class="muted">Every strategy can run on paper first, against live prices. Each check records what fired, what was blocked and why, so you can argue with the log instead of guessing.</p></div>' +
-    '<div class="card"><span class="num">4</span><h3>Go live</h3><p class="muted">Connect your wallet and switch a strategy to live. When a rule fires, you get an order to review. You see the amounts and the price check, then sign in your own wallet. No signature, no trade.</p></div></div>' +
+    '<div class="card"><span class="num">4</span><h3>Go live</h3><p class="muted">Sign in with your wallet and switch a strategy to live. When a rule fires, you get an order to review. You see the amounts and the price check, then sign in your own wallet. No signature, no trade.</p></div></div>' +
 
     '<div class="sec-title">Who does what</div><div class="card">' +
     '<div class="kv"><b>' + SPARK + ' AI</b><span>Understands your description and writes the rules (once, when you build the strategy). It cannot place orders.</span></div>' +
@@ -493,6 +548,7 @@ function pageHow() {
 
     '<div class="sec-title">Your wallet, your control</div><div class="card"><ul class="howlist">' +
     '<li><b>Non-custodial.</b> Connecting a wallet only shares your address and balance. ' + BRAND + ' never sees your private key and cannot move funds on its own.</li>' +
+    '<li><b>Sign in with a message, not a password.</b> To start a strategy you sign a free message that proves you own the wallet. Your strategies belong to that wallet and nobody else can see or change them.</li>' +
     '<li><b>You sign every live order.</b> A rule creates an order that waits for you: 3 minutes to open it, then 90 seconds to sign before the transaction expires.</li>' +
     '<li><b>One order at a time.</b> A new order is only created when the previous one is finished, declined or expired.</li>' +
     '<li><b>A hard stop.</b> If a strategy loses more than your max loss, it pauses itself.</li></ul></div>' +
@@ -521,6 +577,7 @@ function pageHow() {
 
 // Notice at the top when a live strategy has an order waiting for approval.
 async function checkPending() {
+  if (!getSession()) { $('#pendBadge').hidden = true; return; }
   try {
     const list = await api('/api/strategies');
     const n = list.filter(function (s) { return s.live && openOrder(s); }).length;
@@ -531,5 +588,6 @@ async function checkPending() {
 setInterval(checkPending, 10000); checkPending();
 
 // Injected wallets can show up a moment after the page loads.
+walletLabel();
 window.addEventListener('load', function () { setTimeout(function () { autoConnect().then(function () { if (location.hash === '#/wallet') route(); }); }, 300); });
 route();

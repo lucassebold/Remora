@@ -30,6 +30,25 @@ Testes do motor: `node test/run.js`
 
 Sem login, entao o servidor escuta so em `127.0.0.1`. Nao exponha na internet sem criar autenticacao.
 
+## Login com a carteira (sem senha e sem banco)
+
+O site e aberto para olhar, escolher token, gerar regras e testar templates. O login so e pedido ao **iniciar uma
+estrategia** ou ver **My strategies**.
+
+- A pessoa assina uma mensagem gratuita na carteira (nao move fundos). O servidor confere a assinatura ed25519 e
+  devolve um ingresso temporario (HMAC, 12 h). Nada e guardado no servidor para isso (`src/auth.js`).
+- Cada estrategia tem um **dono** (o endereco da carteira). So o dono ve, pausa, apaga ou aprova ordens; os outros
+  recebem 404. Estrategias reais usam a carteira do login.
+- O gerador de regras (IA) e aberto, mas tem **limite de uso por IP** (20 a cada 10 min) para proteger a cota.
+
+| Variavel | Para que serve |
+|---|---|
+| `SESSION_SECRET` | Texto longo e aleatorio (16+ caracteres). **Defina no Railway.** Sem ele, todos saem do login a cada reinicio. |
+| `SESSION_HOURS` | Duracao do login (padrao 12). |
+| `DATA_DIR` | Pasta dos dados (use um Volume do Railway, ex.: `/data`). Sem isso os dados somem a cada deploy. |
+
+Estrategias antigas: as reais passam a pertencer a sua carteira; as de simulacao antigas (sem dono) ficam ocultas.
+
 ## Carteira (somente conexao)
 
 O botao **Conectar carteira** usa a carteira instalada no navegador (Phantom, Solflare ou Backpack) e mostra o
