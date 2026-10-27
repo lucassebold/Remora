@@ -1,4 +1,4 @@
-# Cardume
+# Utrench
 
 > A interface do app esta em ingles. O nome do app fica em um unico lugar (`BRAND` em `public/app.js`, mais `public/index.html` e a mensagem de `src/server.js`).
 
@@ -82,7 +82,7 @@ estrategia aprova; perda maxima obrigatoria; tetos opcionais por variavel (abaix
 
 Limites conhecidos: valores confirmados sao **estimados pela cotacao** (nao le o resultado exato na rede); a Jupiter
 esta migrando da API v1 para a v2 (ajuste so em `src/jupiter.js`); so funciona com a aba aberta; a aprovacao nao
-cobra taxa do Cardume.
+cobra taxa do Utrench.
 
 ## Como funciona
 

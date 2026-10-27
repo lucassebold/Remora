@@ -238,7 +238,7 @@ store.load();
 // Strategies saved before sign-in existed: live ones belong to their wallet; old paper ones have no owner and stay hidden.
 store.all().forEach(function (s) { if (!s.owner && s.wallet) s.owner = s.wallet; });
 server.listen(PORT, HOST, function () {
-  console.log('Cardume at http://' + HOST + ':' + PORT + '  (paper trading by default; live orders need your wallet approval)');
+  console.log('Utrench at http://' + HOST + ':' + PORT + '  (paper trading by default; live orders need your wallet approval)');
   console.log('AI strategy builder: ' + (compiler.available() ? 'on (' + compiler.provider() + ')' : 'off (set GEMINI_API_KEY to enable)'));
   if (auth.ephemeralSecret) console.log('Note: SESSION_SECRET is not set, so everyone is signed out whenever the server restarts. Set a long random SESSION_SECRET.');
   setInterval(tickAll, TICK_MS);

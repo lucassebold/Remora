@@ -6,7 +6,7 @@ function request(method, url, body, headers, timeoutMs) {
   return new Promise(function (resolve, reject) {
     const u = new URL(url);
     const payload = body ? JSON.stringify(body) : null;
-    const h = Object.assign({ accept: 'application/json', 'user-agent': 'cardume/0.1' }, headers || {});
+    const h = Object.assign({ accept: 'application/json', 'user-agent': 'utrench/0.1' }, headers || {});
     if (payload) { h['content-type'] = 'application/json'; h['content-length'] = Buffer.byteLength(payload); }
     const req = https.request({ method: method, hostname: u.hostname, path: u.pathname + u.search, headers: h }, function (res) {
       let data = '';

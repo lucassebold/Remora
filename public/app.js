@@ -1,6 +1,6 @@
 'use strict';
 // App UI: plain JS, no build. Pages: home, token, strategies, strategy, wallet, how it works.
-const BRAND = 'Cardume';
+const BRAND = 'Utrench';
 const $ = function (s, el) { return (el || document).querySelector(s); };
 const view = $('#view');
 let timers = [];      // intervals of the current page (cleared on every navigation)
@@ -73,9 +73,9 @@ const WALLETS = [
 ];
 const W = { id: null, provider: null, address: null };
 // Sign-in session (wallet signature -> token). Stored in the browser; the server keeps nothing.
-function getSession() { try { const x = JSON.parse(localStorage.getItem('cardume_session') || 'null'); return x && x.token && x.expiresAt > Date.now() ? x : null; } catch (e) { return null; } }
-function setSession(x) { try { localStorage.setItem('cardume_session', JSON.stringify({ token: x.token, address: x.address, expiresAt: x.expiresAt })); } catch (e) { /* storage blocked */ } walletLabel(); }
-function clearSession() { try { localStorage.removeItem('cardume_session'); } catch (e) { /* storage blocked */ } walletLabel(); }
+function getSession() { try { const x = JSON.parse(localStorage.getItem('utrench_session') || 'null'); return x && x.token && x.expiresAt > Date.now() ? x : null; } catch (e) { return null; } }
+function setSession(x) { try { localStorage.setItem('utrench_session', JSON.stringify({ token: x.token, address: x.address, expiresAt: x.expiresAt })); } catch (e) { /* storage blocked */ } walletLabel(); }
+function clearSession() { try { localStorage.removeItem('utrench_session'); } catch (e) { /* storage blocked */ } walletLabel(); }
 function walletLabel() {
   const b = $('#walletBtn'), sess = getSession();
   b.textContent = sess ? short(sess.address) : 'Sign in';
@@ -84,9 +84,9 @@ function walletLabel() {
 }
 function setWallet(id, provider, address) {
   W.id = id; W.provider = provider; W.address = address;
-  try { if (id) localStorage.setItem('cardume_wallet', id); else localStorage.removeItem('cardume_wallet'); } catch (e) { /* storage blocked */ }
-  if (provider && provider.on && !provider.__cardume) {
-    provider.__cardume = true;
+  try { if (id) localStorage.setItem('utrench_wallet', id); else localStorage.removeItem('utrench_wallet'); } catch (e) { /* storage blocked */ }
+  if (provider && provider.on && !provider.__utrench) {
+    provider.__utrench = true;
     provider.on('disconnect', function () { setWallet(null, null, null); if (location.hash === '#/wallet') route(); });
     provider.on('accountChanged', function (pk) { if (pk) { W.address = pk.toString(); walletLabel(); if (location.hash === '#/wallet') route(); } else { setWallet(null, null, null); if (location.hash === '#/wallet') route(); } });
   }
@@ -103,7 +103,7 @@ async function connectWallet(id) {
 async function disconnectWallet() { try { if (W.provider && W.provider.disconnect) await W.provider.disconnect(); } catch (e) { /* already disconnected */ } setWallet(null, null, null); }
 // Silently reconnects if the user already approved this site before (opens no window).
 async function autoConnect() {
-  let id = null; try { id = localStorage.getItem('cardume_wallet'); } catch (e) { /* no storage */ }
+  let id = null; try { id = localStorage.getItem('utrench_wallet'); } catch (e) { /* no storage */ }
   const w = WALLETS.filter(function (x) { return x.id === id; })[0], p = w && w.get();
   if (!p) return;
   try { const r = await p.connect({ onlyIfTrusted: true }); const pk = (r && r.publicKey) || p.publicKey; if (pk) setWallet(id, p, pk.toString()); } catch (e) { /* not authorized yet */ }
@@ -207,7 +207,7 @@ window.addEventListener('hashchange', route);
 /* ---------- home ---------- */
 async function pageHome() {
   store('pendingPhrase', null);
-  view.innerHTML = '<div class="hero"><span class="aibadge">' + SPARK + ' Solana · AI strategy bots</span><h1>Describe it.<br>AI builds the rules.</h1>' +
+  view.innerHTML = '<div class="hero"><span class="aibadge">' + SPARK + ' Solana · AI strategy bots</span><h1>Describe it.<br><em>AI builds the rules.</em></h1>' +
     '<p>Write your trading strategy in plain English. <b>AI turns it into rules you can read</b>, you test them on live prices, and trade from your own wallet, approving every order.</p>' +
     '<form id="aif" class="aibox">' + SPARK + '<input id="aiin" placeholder="Buy $50 every hour under $0.40. If it drops 25% from the peak, sell everything." autocomplete="off"><button class="btn primary">Build with AI</button></form>' +
     '<div class="chips" id="chips">' + EXAMPLES.map(function (x, i) { return '<button type="button" class="chip" data-i="' + i + '">' + esc(x) + '</button>'; }).join('') + '</div>' +
@@ -297,7 +297,7 @@ async function drawChart(pair, res) {
   if (!window.LightweightCharts) { el.innerHTML = '<div class="empty">Chart library unavailable</div>'; return; }
   if (chartObj) { chartObj.remove(); chartObj = null; }
   el.innerHTML = '';
-  chartObj = LightweightCharts.createChart(el, { height: 400, layout: { background: { color: '#07090c' }, textColor: '#8a94a3' }, grid: { vertLines: { color: '#10151c' }, horzLines: { color: '#10151c' } }, timeScale: { timeVisible: true, borderColor: '#1a2029' }, rightPriceScale: { borderColor: '#1a2029' } });
+  chartObj = LightweightCharts.createChart(el, { height: 400, layout: { background: { color: '#09060f' }, textColor: '#9a8fb3' }, grid: { vertLines: { color: '#171024' }, horzLines: { color: '#171024' } }, timeScale: { timeVisible: true, borderColor: '#261b3a' }, rightPriceScale: { borderColor: '#261b3a' } });
   const series = chartObj.addCandlestickSeries({ upColor: '#22c55e', downColor: '#ef4444', borderVisible: false, wickUpColor: '#22c55e', wickDownColor: '#ef4444', priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 } });
   try { const c = await api('/api/bars?pair=' + pair + '&res=' + res); series.setData(c.map(function (x) { return { time: x.time, open: x.open, high: x.high, low: x.low, close: x.close }; })); chartObj.timeScale().fitContent(); }
   catch (e) { el.innerHTML = '<div class="empty">Candles unavailable right now: ' + esc(e.message) + '</div>'; }
@@ -522,7 +522,7 @@ async function pageStrategy(id) {
 function pageHow() {
   const L = function (name, text) { return '<div class="kv"><b class="mono">' + name + '</b><span>' + text + '</span></div>'; };
   view.innerHTML = '<div class="wrap how">' +
-    '<div class="howhead"><span class="aibadge">' + SPARK + ' How it works</span><h1>From a sentence to a running strategy.</h1>' +
+    '<div class="howhead"><span class="aibadge">' + SPARK + ' How it works</span><h1>From a sentence to a <em>running strategy.</em></h1>' +
     '<p>' + BRAND + ' lets you describe a trading idea in plain English, turns it into rules you can read, tests it on live prices, and trades from your own wallet. You stay in control of every order. Browsing is open: you only sign in when you start a strategy.</p>' +
     '<div class="row" style="justify-content:flex-start;gap:10px"><a class="btn primary" href="#/">' + SPARK + ' Build a strategy</a><a class="btn" href="#/strategies">My strategies</a></div></div>' +
 

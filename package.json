@@ -1,5 +1,5 @@
 {
-  "name": "cardume",
+  "name": "utrench",
   "version": "0.1.0",
   "description": "Terminal de estrategias para Solana: regras legiveis, simulacao com precos reais",
   "main": "src/server.js",

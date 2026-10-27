@@ -45,7 +45,7 @@ function pubKeyOf(address) {
 exports.challenge = function (address, now) {
   pubKeyOf(address); // validates the address
   const issued = now || Date.now(), nonce = crypto.randomBytes(12).toString('hex');
-  const body = 'Sign in to Cardume\n\nThis signature proves you own this wallet. It is free and cannot move your funds.\n\nAddress: ' + address + '\nIssued: ' + issued + '\nNonce: ' + nonce;
+  const body = 'Sign in to Utrench\n\nThis signature proves you own this wallet. It is free and cannot move your funds.\n\nAddress: ' + address + '\nIssued: ' + issued + '\nNonce: ' + nonce;
   return { message: body + '\nTag: ' + hmac('ch|' + address + '|' + issued + '|' + nonce) };
 };
 

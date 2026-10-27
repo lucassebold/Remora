@@ -42,7 +42,7 @@ t('login: rejects wrong signer, other address, tampered message and expired chal
   const forged = c.message.replace('Nonce: ', 'Nonce: 0');
   assert.throws(function () { auth.login(a.address, forged, a.sign(forged), 1e12 + 1000); }, /Invalid sign-in request/); // not issued by this server
   assert.throws(function () { auth.login(a.address, c.message, a.sign(c.message), 1e12 + 6 * 60000); }, /expired/);   // older than 5 min
-  const own = 'Sign in to Cardume\nAddress: ' + a.address + '\nIssued: ' + 1e12 + '\nNonce: x\nTag: y'; // made-up challenge
+  const own = 'Sign in to Utrench\nAddress: ' + a.address + '\nIssued: ' + 1e12 + '\nNonce: x\nTag: y'; // made-up challenge
   assert.throws(function () { auth.login(a.address, own, a.sign(own), 1e12 + 1000); }, /Invalid sign-in request/);
 });
 
