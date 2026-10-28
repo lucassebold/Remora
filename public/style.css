@@ -73,7 +73,21 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .tftabs button.on { background: var(--grad); color: var(--on-accent); box-shadow: 0 4px 14px #d946ef38; }
 .col.left .tok { padding: 9px 10px 9px 14px; gap: 9px; } .col.left .tok img, .col.left .tok .ph { width: 36px; height: 36px; border-radius: 10px; }
 .col.left .tok .nm { font-size: 14px; } .col.left .tok .mc { font-size: 14px; } .col.left .tok .extra { display: none; }
-@media (prefers-reduced-motion: reduce) { .tag.hot, .livedot, .bump-up, .bump-down { animation: none; } }
+/* rows breathe all the time (not tied to data), so the list never looks frozen between reads */
+.tok > * { position: relative; z-index: 1; }
+.tok::after { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none; opacity: 0; animation: breathe var(--bt, 2.8s) ease-in-out var(--d, 0s) infinite; }
+.tok.t-up::after { background: linear-gradient(90deg, transparent 20%, rgb(34 197 94 / calc(.16 + var(--i) * .34)) 100%); }
+.tok.t-down::after { background: linear-gradient(90deg, transparent 20%, rgb(239 68 68 / calc(.16 + var(--i) * .34)) 100%); }
+@keyframes breathe { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+.spark { flex: none; overflow: visible; }
+.spark .ring { transform-box: fill-box; transform-origin: center; animation: ring 1.8s ease-out infinite; }
+@keyframes ring { from { transform: scale(1); opacity: .8; } to { transform: scale(3.4); opacity: 0; } }
+.refbar { height: 3px; background: #ffffff10; border-radius: 12px 12px 0 0; overflow: hidden; }
+.refbar i { display: block; height: 100%; width: 0; background: var(--grad); box-shadow: 0 0 10px #d946ef; }
+@keyframes refill { from { width: 0; } to { width: 100%; } }
+.col.left .spark { display: none; }
+@media (max-width: 760px) { .spark { display: none; } }
+@media (prefers-reduced-motion: reduce) { .tag.hot, .livedot, .bump-up, .bump-down, .tok::after, .spark .ring, .refbar i { animation: none; } }
 
 /* pagina do token */
 .tokpage { display: grid; grid-template-columns: 270px minmax(0, 1fr) 360px; min-height: calc(100vh - 52px); }

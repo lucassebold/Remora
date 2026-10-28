@@ -49,22 +49,41 @@ let trendTf = 'h1', trendList = [], trendPrev = {}, trendAt = 0;
 function isHot(t) { return (t.volume.h1 >= 5000 && t.volume.m5 * 12 >= t.volume.h1 * 3) || t.change.m5 >= 15; }
 function isNew(t) { return t.createdAt && Date.now() - t.createdAt < 6 * 3600000; }
 function arrowPct(v) { return (v >= 0 ? '↑ ' : '↓ ') + Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 1 }) + '%'; }
-function setTrend(list) { trendPrev = {}; trendList.forEach(function (t) { trendPrev[t.mint] = t; }); trendList = list; trendAt = Date.now(); }
+function setTrend(list) {
+  trendPrev = {}; trendList.forEach(function (t) { trendPrev[t.mint] = t; }); trendList = list; trendAt = Date.now();
+  const bar = document.getElementById('refi');   // the bar under the title fills up until the next read
+  if (bar) { bar.style.animation = 'none'; void bar.offsetWidth; bar.style.animation = 'refill ' + TREND_REFRESH_MS + 'ms linear forwards'; }
+}
 
-function tokRow(t, on, bumps) {
+// Price shape over the last 24 h, rebuilt from the real 5m / 1h / 6h / 24h changes (older points sit closer together).
+function sparkline(t, up) {
+  const p = Number(t.price), at = function (c) { const f = 1 + (Number(c) || 0) / 100; return f > 0.01 ? p / f : null; };
+  const pts = [[0, at(t.change.h24)], [0.35, at(t.change.h6)], [0.7, at(t.change.h1)], [0.93, at(t.change.m5)], [1, p]].filter(function (x) { return x[1] != null && x[1] > 0; });
+  if (pts.length < 2) return '';
+  const lo = Math.min.apply(null, pts.map(function (x) { return x[1]; })), hi = Math.max.apply(null, pts.map(function (x) { return x[1]; })), W = 84, H = 30;
+  const xy = pts.map(function (x) { return [3 + x[0] * (W - 9), hi === lo ? H / 2 : 4 + (1 - (x[1] - lo) / (hi - lo)) * (H - 8)]; });
+  const col = up ? '#22c55e' : '#ef4444', end = xy[xy.length - 1];
+  return '<svg class="spark" width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '" aria-hidden="true"><polyline fill="none" stroke="' + col + '" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" opacity=".85" points="' +
+    xy.map(function (q) { return q[0].toFixed(1) + ',' + q[1].toFixed(1); }).join(' ') + '"/><circle class="ring" cx="' + end[0].toFixed(1) + '" cy="' + end[1].toFixed(1) + '" r="2.6" fill="' + col + '"/><circle cx="' + end[0].toFixed(1) + '" cy="' + end[1].toFixed(1) + '" r="2.6" fill="' + col + '"/></svg>';
+}
+
+function tokRow(t, on, bumps, idx) {
   const chg = Number(t.change[trendTf]) || 0, up = chg >= 0, prev = bumps ? trendPrev[t.mint] : null;
   const pc = prev ? Number(prev.change[trendTf]) || 0 : chg;
   const mcMoved = prev && prev.marketCap !== t.marketCap, chMoved = prev && pc !== chg;
-  return '<a class="tok ' + (up ? 't-up' : 't-down') + (on ? ' on' : '') + '" style="--i:' + Math.min(1, Math.abs(chg) / 60).toFixed(2) + '" href="#/t/' + esc(t.mint) + '">' +
+  // Each row breathes all the time: bigger moves and HOT rows breathe faster. The phase comes from the clock, so a
+  // re-render does not restart it, and rows are staggered so the list ripples instead of blinking together.
+  const k = Math.min(1, Math.abs(chg) / 60), bt = isHot(t) ? 1.5 : 2.8 - k, delay = -(((Date.now() / 1000) + (idx || 0) * 0.17) % bt);
+  return '<a class="tok ' + (up ? 't-up' : 't-down') + (on ? ' on' : '') + '" style="--i:' + k.toFixed(2) + ';--bt:' + bt.toFixed(2) + 's;--d:' + delay.toFixed(2) + 's" href="#/t/' + esc(t.mint) + '">' +
     (t.icon ? '<img src="' + esc(t.icon) + '" alt="" loading="lazy">' : '<div class="ph"></div>') +
     '<div class="n"><div class="nm"><b>' + esc(t.symbol) + '</b>' + (isHot(t) ? '<span class="tag hot">&#128293; HOT</span>' : '') + (isNew(t) ? '<span class="tag new">NEW</span>' : '') + '</div>' +
-    '<div class="sub">' + price(t.price) + '<span class="extra"> &middot; ' + (t.createdAt ? esc(ago(t.createdAt)) + ' &middot; ' : '') + 'vol ' + usd(t.volume[trendTf]) + '</span></div></div>' +
+    '<div class="sub">' + price(t.price) + '<span class="extra"> &middot; ' + (t.createdAt ? esc(ago(t.createdAt)) + ' &middot; ' : '') + 'vol ' + usd(t.volume[trendTf]) + '</span></div></div>' + sparkline(t, up) +
     '<div class="r"><div class="mc' + (mcMoved ? (t.marketCap > prev.marketCap ? ' bump-up' : ' bump-down') + '" data-from="' + esc(prev.marketCap) + '" data-to="' + esc(t.marketCap) + '" data-k="usd' : '') + '">' + usd(t.marketCap) + '</div>' +
     '<div class="ch ' + (up ? 'up' : 'down') + (chMoved ? (chg > pc ? ' bump-up' : ' bump-down') + '" data-from="' + esc(pc) + '" data-to="' + esc(chg) + '" data-k="pct' : '') + '">' + arrowPct(chg) + '</div></div></a>';
 }
 function trendRows(onMint, bumps) {
   return trendList.slice().sort(function (a, b) { return b.volume[trendTf] - a.volume[trendTf]; }).slice(0, TREND_SHOWN)
-    .map(function (t) { return tokRow(t, t.mint === onMint, bumps); }).join('');
+    .map(function (t, i) { return tokRow(t, t.mint === onMint, bumps, i); }).join('');
 }
 // Rolls the changed numbers from their old value to the new one (only values that really moved carry data-from).
 function animateNums(root) {
@@ -259,7 +278,7 @@ async function pageHome() {
     '<div class="step"><b>04 · Go live</b><br><span class="muted">Sign each order in your own wallet. <a class="up" href="#/how-it-works">How it works</a></span></div></div>' +
     '<div class="trendhead"><div class="sec-title">Trending now<span class="livedot"></span><span class="age" id="trendage">live</span></div>' +
     '<div class="tftabs" id="tftabs">' + TF.map(function (x) { return '<button data-tf="' + x[0] + '"' + (x[0] === trendTf ? ' class="on"' : '') + '>' + x[1] + '</button>'; }).join('') + '</div></div>' +
-    '<div id="trend" class="card" style="padding:0;overflow:hidden"><div class="empty">Loading...</div></div></div>';
+    '<div class="refbar"><i id="refi"></i></div><div id="trend" class="card" style="padding:0;overflow:hidden;border-top-left-radius:0;border-top-right-radius:0"><div class="empty">Loading...</div></div></div>';
   $('#chips').addEventListener('click', function (e) { const b = e.target.closest('.chip'); if (!b) return; $('#aiin').value = EXAMPLES[Number(b.dataset.i)]; $('#aiin').focus(); });
   $('#aif').addEventListener('submit', function (e) {
     e.preventDefault();
