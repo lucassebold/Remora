@@ -40,24 +40,49 @@ function post(path, body) { return api(path, { method: 'POST', headers: { 'conte
 function toast(msg, err) { const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (err ? ' err' : ''); t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(function () { t.hidden = true; }, 4500); }
 function every(fn, ms) { timers.push(setInterval(fn, ms)); }
 
-function tokRow(t, on, flash) {
-  return '<a class="tok' + (on ? ' on' : '') + (flash || '') + '" href="#/t/' + esc(t.mint) + '">' +
-    (t.icon ? '<img src="' + esc(t.icon) + '" alt="" loading="lazy">' : '<div class="ph"></div>') +
-    '<div class="n"><b>' + esc(t.symbol) + '</b><span>' + price(t.price) + ' &middot; ' + usd(t.volume.h1) + ' vol</span></div>' +
-    '<div class="r"><div>' + usd(t.marketCap) + ' <span class="muted">MC</span></div>' + pct(t.change.m5) + ' <span class="muted">5m</span></div></a>';
-}
+// ---------- trending list ----------
+// Refreshes every 10 s with real market data. Rows are tinted by the move in the chosen period, HOT marks tokens whose
+// volume is accelerating, and a number that really changed pops, flashes and rolls to its new value.
+const TF = [['m5', '5m'], ['h1', '1h'], ['h6', '6h'], ['h24', '24h']];
+const TREND_REFRESH_MS = 10000, TREND_SHOWN = 40;
+let trendTf = 'h1', trendList = [], trendPrev = {}, trendAt = 0;
+function isHot(t) { return (t.volume.h1 >= 5000 && t.volume.m5 * 12 >= t.volume.h1 * 3) || t.change.m5 >= 15; }
+function isNew(t) { return t.createdAt && Date.now() - t.createdAt < 6 * 3600000; }
+function arrowPct(v) { return (v >= 0 ? '↑ ' : '↓ ') + Math.abs(v).toLocaleString('en-US', { maximumFractionDigits: 1 }) + '%'; }
+function setTrend(list) { trendPrev = {}; trendList.forEach(function (t) { trendPrev[t.mint] = t; }); trendList = list; trendAt = Date.now(); }
 
-// The trending list refreshes on its own; a row flashes green or red when its price moved since the last read.
-const lastPrice = {};
-function trendRows(list, onMint) {
-  const html = list.map(function (x) {
-    const old = lastPrice[x.mint];
-    return tokRow(x, x.mint === onMint, old && x.price !== old ? (x.price > old ? ' flash-up' : ' flash-down') : '');
-  }).join('');
-  list.forEach(function (x) { lastPrice[x.mint] = x.price; });
-  return html;
+function tokRow(t, on, bumps) {
+  const chg = Number(t.change[trendTf]) || 0, up = chg >= 0, prev = bumps ? trendPrev[t.mint] : null;
+  const pc = prev ? Number(prev.change[trendTf]) || 0 : chg;
+  const mcMoved = prev && prev.marketCap !== t.marketCap, chMoved = prev && pc !== chg;
+  return '<a class="tok ' + (up ? 't-up' : 't-down') + (on ? ' on' : '') + '" style="--i:' + Math.min(1, Math.abs(chg) / 60).toFixed(2) + '" href="#/t/' + esc(t.mint) + '">' +
+    (t.icon ? '<img src="' + esc(t.icon) + '" alt="" loading="lazy">' : '<div class="ph"></div>') +
+    '<div class="n"><div class="nm"><b>' + esc(t.symbol) + '</b>' + (isHot(t) ? '<span class="tag hot">&#128293; HOT</span>' : '') + (isNew(t) ? '<span class="tag new">NEW</span>' : '') + '</div>' +
+    '<div class="sub">' + price(t.price) + '<span class="extra"> &middot; ' + (t.createdAt ? esc(ago(t.createdAt)) + ' &middot; ' : '') + 'vol ' + usd(t.volume[trendTf]) + '</span></div></div>' +
+    '<div class="r"><div class="mc' + (mcMoved ? (t.marketCap > prev.marketCap ? ' bump-up' : ' bump-down') + '" data-from="' + esc(prev.marketCap) + '" data-to="' + esc(t.marketCap) + '" data-k="usd' : '') + '">' + usd(t.marketCap) + '</div>' +
+    '<div class="ch ' + (up ? 'up' : 'down') + (chMoved ? (chg > pc ? ' bump-up' : ' bump-down') + '" data-from="' + esc(pc) + '" data-to="' + esc(chg) + '" data-k="pct' : '') + '">' + arrowPct(chg) + '</div></div></a>';
 }
-const TREND_REFRESH_MS = 30000;
+function trendRows(onMint, bumps) {
+  return trendList.slice().sort(function (a, b) { return b.volume[trendTf] - a.volume[trendTf]; }).slice(0, TREND_SHOWN)
+    .map(function (t) { return tokRow(t, t.mint === onMint, bumps); }).join('');
+}
+// Rolls the changed numbers from their old value to the new one (only values that really moved carry data-from).
+function animateNums(root) {
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  Array.prototype.forEach.call(root.querySelectorAll('[data-to]'), function (el) {
+    const from = Number(el.getAttribute('data-from')), to = Number(el.getAttribute('data-to')), usdKind = el.getAttribute('data-k') === 'usd', t0 = performance.now();
+    (function step(now) {
+      const k = Math.min(1, (now - t0) / 900), e = 1 - Math.pow(1 - k, 3), v = from + (to - from) * e;
+      el.textContent = usdKind ? usd(v) : arrowPct(v);
+      if (k < 1 && el.isConnected) requestAnimationFrame(step);
+    })(t0);
+  });
+}
+function renderTrend(box, onMint, bumps) {
+  if (!box) return;
+  box.innerHTML = trendList.length ? trendRows(onMint, bumps) : '<div class="empty">No data right now</div>';
+  animateNums(box);
+}
 
 /* ---------- search ---------- */
 const sIn = $('#searchInput'), sOut = $('#searchResults');
@@ -232,7 +257,9 @@ async function pageHome() {
     '<div class="step"><b>02 · Review</b><br><span class="muted">Read the rules as when / if / then and set your limits.</span></div>' +
     '<div class="step"><b>03 · Test</b><br><span class="muted">Paper trade on live prices and watch every decision.</span></div>' +
     '<div class="step"><b>04 · Go live</b><br><span class="muted">Sign each order in your own wallet. <a class="up" href="#/how-it-works">How it works</a></span></div></div>' +
-    '<div class="sec-title" id="trendtitle">Trending now <span class="livedot" title="Updates every 30 seconds"></span></div><div id="trend" class="card" style="padding:0"><div class="empty">Loading...</div></div></div>';
+    '<div class="trendhead"><div class="sec-title">Trending now<span class="livedot"></span><span class="age" id="trendage">live</span></div>' +
+    '<div class="tftabs" id="tftabs">' + TF.map(function (x) { return '<button data-tf="' + x[0] + '"' + (x[0] === trendTf ? ' class="on"' : '') + '>' + x[1] + '</button>'; }).join('') + '</div></div>' +
+    '<div id="trend" class="card" style="padding:0;overflow:hidden"><div class="empty">Loading...</div></div></div>';
   $('#chips').addEventListener('click', function (e) { const b = e.target.closest('.chip'); if (!b) return; $('#aiin').value = EXAMPLES[Number(b.dataset.i)]; $('#aiin').focus(); });
   $('#aif').addEventListener('submit', function (e) {
     e.preventDefault();
@@ -252,17 +279,26 @@ async function pageHome() {
     const q = $('#hi').value.trim(); if (!q) return;
     try { const r = await api('/api/search?q=' + encodeURIComponent(q)); if (r[0]) location.hash = '#/t/' + r[0].mint; else toast('No token found', true); } catch (er) { toast(er.message, true); }
   });
+  $('#tftabs').addEventListener('click', function (e) {
+    const b = e.target.closest('button'); if (!b) return;
+    trendTf = b.getAttribute('data-tf');
+    Array.prototype.forEach.call($('#tftabs').children, function (x) { x.classList.toggle('on', x === b); });
+    renderTrend($('#trend'), null, false);
+  });
   const loadTrend = async function () {
-    try { const t = await api('/api/trending'); const box = $('#trend'); if (box) box.innerHTML = t.length ? trendRows(t) : '<div class="empty">No data right now</div>'; }
+    try { setTrend(await api('/api/trending')); renderTrend($('#trend'), null, true); }
     catch (e) { const box = $('#trend'); if (box && !box.querySelector('.tok')) box.innerHTML = '<div class="empty">Could not load: ' + esc(e.message) + '</div>'; }
   };
+  if (trendList.length) renderTrend($('#trend'), null, false);   // instant paint from the last read
+  every(function () { const a = $('#trendage'); if (a && trendAt) a.textContent = 'updated ' + Math.floor((Date.now() - trendAt) / 1000) + 's ago'; }, 1000);
   await loadTrend(); every(loadTrend, TREND_REFRESH_MS);
 }
 
 /* ---------- token ---------- */
 async function pageToken(mint) {
   view.innerHTML = '<div class="tokpage"><div class="col left" id="tl"></div><div class="col" id="tc"><div class="empty" style="margin:20px">Loading token...</div></div><div class="col right" id="tr"></div></div>';
-  const loadList = function () { api('/api/trending').then(function (t) { const box = $('#tl'); if (box) box.innerHTML = trendRows(t, mint); }).catch(function () {}); };
+  const loadList = function () { api('/api/trending').then(function (t) { setTrend(t); renderTrend($('#tl'), mint, true); }).catch(function () {}); };
+  if (trendList.length) renderTrend($('#tl'), mint, false);
   loadList(); every(loadList, TREND_REFRESH_MS);
   let d;
   try { d = await api('/api/token/' + mint); } catch (e) { $('#tc').innerHTML = '<div class="empty" style="margin:20px">' + esc(e.message) + '</div>'; return; }

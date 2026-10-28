@@ -61,16 +61,25 @@ exports.search = async function (q) {
 // (3 chamadas), completa os numeros em lote e ordena pelo volume da ultima hora. Todo mundo le a mesma
 // copia, entao o custo nao cresce com o numero de usuarios.
 let trendCache = { t: 0, list: [] }, trendPending = null;
-const TREND_TTL_MS = 30000, TREND_MAX = 40, TREND_MIN_LIQUIDITY = 1000;
+// Os numeros (3 chamadas em lote) sao relidos a cada 10 s; quem entra na lista (3 chamadas) muda devagar, 1 vez por minuto.
+const TREND_TTL_MS = 10000, SOURCES_TTL_MS = 60000, TREND_MAX = 60, TREND_MIN_LIQUIDITY = 1000;
 const TREND_SOURCES = ['/token-boosts/top/v1', '/token-boosts/latest/v1', '/token-profiles/latest/v1'];
+let sourceMints = { t: 0, list: [] };
 
-async function buildTrending() {
+async function trendMints() {
+  if (sourceMints.list.length && Date.now() - sourceMints.t < SOURCES_TTL_MS) return sourceMints.list;
   const mints = [];
   const lists = await Promise.all(TREND_SOURCES.map(function (p) { return http.getJson(DEX + p).catch(function () { return null; }); }));
-  if (!lists.some(Boolean)) throw new Error('No data');
+  if (!lists.some(Boolean)) { if (sourceMints.list.length) return sourceMints.list; throw new Error('No data'); }
   lists.forEach(function (l) {
     (l || []).forEach(function (b) { if (b && b.chainId === 'solana' && b.tokenAddress && mints.indexOf(b.tokenAddress) < 0) mints.push(b.tokenAddress); });
   });
+  sourceMints = { t: Date.now(), list: mints };
+  return mints;
+}
+
+async function buildTrending() {
+  const mints = await trendMints();
   const snaps = await exports.snapshots(mints.slice(0, 90));
   return Object.keys(snaps).map(function (k) { return snaps[k]; })
     .filter(function (s) { return s.liquidity >= TREND_MIN_LIQUIDITY; })
