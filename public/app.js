@@ -114,11 +114,20 @@ function scramble(el) {
 function ambientTick(box) {
   if (!box || document.hidden || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
   const rows = Array.prototype.filter.call(box.querySelectorAll('.tok'), function (r) { const b = r.getBoundingClientRect(); return b.bottom > 0 && b.top < window.innerHeight; });
-  for (let i = 0; i < 3 && rows.length; i++) {
-    const row = rows.splice(Math.floor(Math.random() * rows.length), 1)[0];
+  const run = function (row) {
     const el = row.querySelector(Math.random() < 0.65 ? '.mc' : '.ch');
     if (el && !el.hasAttribute('data-to') && !el.classList.contains('scan')) scramble(el);   // never touch a number that is rolling for a real change
+  };
+  // Most people watch the top of the list, so the first 10 visible rows take turns (4 per tick: each one about every 5 s),
+  // and 2 random rows from the rest keep the bottom from sitting still.
+  const top = rows.slice(0, 10), rest = rows.slice(10);
+  if (!box._turns || box._turns.length < 4) {
+    const order = top.map(function (_, i) { return i; });
+    for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)), x = order[i]; order[i] = order[j]; order[j] = x; }
+    box._turns = (box._turns || []).concat(order);
   }
+  for (let i = 0; i < 4; i++) { const row = top[box._turns.shift()]; if (row) run(row); }
+  for (let i = 0; i < 2 && rest.length; i++) run(rest.splice(Math.floor(Math.random() * rest.length), 1)[0]);
 }
 function renderTrend(box, onMint, bumps) {
   if (!box) return;
