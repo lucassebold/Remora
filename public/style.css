@@ -79,6 +79,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .tok.t-up::after { background: linear-gradient(90deg, transparent 20%, rgb(34 197 94 / calc(.16 + var(--i) * .34)) 100%); }
 .tok.t-down::after { background: linear-gradient(90deg, transparent 20%, rgb(239 68 68 / calc(.16 + var(--i) * .34)) 100%); }
 @keyframes breathe { 0%, 100% { opacity: 0; } 50% { opacity: 1; } }
+.tok .scan { text-shadow: 0 0 10px #a855f7, 0 0 2px #c4b5fd; }
 .spark { flex: none; overflow: visible; }
 .spark .ring { transform-box: fill-box; transform-origin: center; animation: ring 1.8s ease-out infinite; }
 @keyframes ring { from { transform: scale(1); opacity: .8; } to { transform: scale(3.4); opacity: 0; } }

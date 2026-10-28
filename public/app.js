@@ -97,6 +97,29 @@ function animateNums(root) {
     })(t0);
   });
 }
+// Ambient life: every 2 s a few visible rows re-"build" a number, digits shuffling and settling left to right on the TRUE value.
+// It is only a visual effect (neutral violet glow, no green/red, no arrow), so a real change keeps its own look.
+function scramble(el) {
+  const final = el.textContent, n = final.length, t0 = performance.now();
+  el.classList.add('scan');
+  (function step(now) {
+    if (!el.isConnected) return;
+    const k = Math.min(1, (now - t0) / 700), fixed = Math.floor(k * n);
+    let out = '';
+    for (let i = 0; i < n; i++) { const c = final.charAt(i); out += i < fixed || !/[0-9]/.test(c) ? c : String(Math.floor(Math.random() * 10)); }
+    el.textContent = out;
+    if (k < 1) requestAnimationFrame(step); else el.classList.remove('scan');
+  })(t0);
+}
+function ambientTick(box) {
+  if (!box || document.hidden || (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches)) return;
+  const rows = Array.prototype.filter.call(box.querySelectorAll('.tok'), function (r) { const b = r.getBoundingClientRect(); return b.bottom > 0 && b.top < window.innerHeight; });
+  for (let i = 0; i < 3 && rows.length; i++) {
+    const row = rows.splice(Math.floor(Math.random() * rows.length), 1)[0];
+    const el = row.querySelector(Math.random() < 0.65 ? '.mc' : '.ch');
+    if (el && !el.hasAttribute('data-to') && !el.classList.contains('scan')) scramble(el);   // never touch a number that is rolling for a real change
+  }
+}
 function renderTrend(box, onMint, bumps) {
   if (!box) return;
   box.innerHTML = trendList.length ? trendRows(onMint, bumps) : '<div class="empty">No data right now</div>';
@@ -310,6 +333,7 @@ async function pageHome() {
   };
   if (trendList.length) renderTrend($('#trend'), null, false);   // instant paint from the last read
   every(function () { const a = $('#trendage'); if (a && trendAt) a.textContent = 'updated ' + Math.floor((Date.now() - trendAt) / 1000) + 's ago'; }, 1000);
+  every(function () { ambientTick($('#trend')); }, 2000);
   await loadTrend(); every(loadTrend, TREND_REFRESH_MS);
 }
 
@@ -319,6 +343,7 @@ async function pageToken(mint) {
   const loadList = function () { api('/api/trending').then(function (t) { setTrend(t); renderTrend($('#tl'), mint, true); }).catch(function () {}); };
   if (trendList.length) renderTrend($('#tl'), mint, false);
   loadList(); every(loadList, TREND_REFRESH_MS);
+  every(function () { ambientTick($('#tl')); }, 2000);
   let d;
   try { d = await api('/api/token/' + mint); } catch (e) { $('#tc').innerHTML = '<div class="empty" style="margin:20px">' + esc(e.message) + '</div>'; return; }
   const s = d.snap, r = d.risk;
