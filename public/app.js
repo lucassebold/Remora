@@ -40,12 +40,24 @@ function post(path, body) { return api(path, { method: 'POST', headers: { 'conte
 function toast(msg, err) { const t = $('#toast'); t.textContent = msg; t.className = 'toast' + (err ? ' err' : ''); t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(function () { t.hidden = true; }, 4500); }
 function every(fn, ms) { timers.push(setInterval(fn, ms)); }
 
-function tokRow(t, on) {
-  return '<a class="tok' + (on ? ' on' : '') + '" href="#/t/' + esc(t.mint) + '">' +
+function tokRow(t, on, flash) {
+  return '<a class="tok' + (on ? ' on' : '') + (flash || '') + '" href="#/t/' + esc(t.mint) + '">' +
     (t.icon ? '<img src="' + esc(t.icon) + '" alt="" loading="lazy">' : '<div class="ph"></div>') +
-    '<div class="n"><b>' + esc(t.symbol) + '</b><span>' + price(t.price) + '</span></div>' +
-    '<div class="r"><div>' + usd(t.marketCap) + ' <span class="muted">MC</span></div>' + pct(t.change.h24) + '</div></a>';
+    '<div class="n"><b>' + esc(t.symbol) + '</b><span>' + price(t.price) + ' &middot; ' + usd(t.volume.h1) + ' vol</span></div>' +
+    '<div class="r"><div>' + usd(t.marketCap) + ' <span class="muted">MC</span></div>' + pct(t.change.m5) + ' <span class="muted">5m</span></div></a>';
 }
+
+// The trending list refreshes on its own; a row flashes green or red when its price moved since the last read.
+const lastPrice = {};
+function trendRows(list, onMint) {
+  const html = list.map(function (x) {
+    const old = lastPrice[x.mint];
+    return tokRow(x, x.mint === onMint, old && x.price !== old ? (x.price > old ? ' flash-up' : ' flash-down') : '');
+  }).join('');
+  list.forEach(function (x) { lastPrice[x.mint] = x.price; });
+  return html;
+}
+const TREND_REFRESH_MS = 30000;
 
 /* ---------- search ---------- */
 const sIn = $('#searchInput'), sOut = $('#searchResults');
@@ -220,7 +232,7 @@ async function pageHome() {
     '<div class="step"><b>02 · Review</b><br><span class="muted">Read the rules as when / if / then and set your limits.</span></div>' +
     '<div class="step"><b>03 · Test</b><br><span class="muted">Paper trade on live prices and watch every decision.</span></div>' +
     '<div class="step"><b>04 · Go live</b><br><span class="muted">Sign each order in your own wallet. <a class="up" href="#/how-it-works">How it works</a></span></div></div>' +
-    '<div class="sec-title" id="trendtitle">Trending now</div><div id="trend" class="card" style="padding:0"><div class="empty">Loading...</div></div></div>';
+    '<div class="sec-title" id="trendtitle">Trending now <span class="livedot" title="Updates every 30 seconds"></span></div><div id="trend" class="card" style="padding:0"><div class="empty">Loading...</div></div></div>';
   $('#chips').addEventListener('click', function (e) { const b = e.target.closest('.chip'); if (!b) return; $('#aiin').value = EXAMPLES[Number(b.dataset.i)]; $('#aiin').focus(); });
   $('#aif').addEventListener('submit', function (e) {
     e.preventDefault();
@@ -240,14 +252,18 @@ async function pageHome() {
     const q = $('#hi').value.trim(); if (!q) return;
     try { const r = await api('/api/search?q=' + encodeURIComponent(q)); if (r[0]) location.hash = '#/t/' + r[0].mint; else toast('No token found', true); } catch (er) { toast(er.message, true); }
   });
-  try { const t = await api('/api/trending'); $('#trend').innerHTML = t.length ? t.map(function (x) { return tokRow(x); }).join('') : '<div class="empty">No data right now</div>'; }
-  catch (e) { $('#trend').innerHTML = '<div class="empty">Could not load: ' + esc(e.message) + '</div>'; }
+  const loadTrend = async function () {
+    try { const t = await api('/api/trending'); const box = $('#trend'); if (box) box.innerHTML = t.length ? trendRows(t) : '<div class="empty">No data right now</div>'; }
+    catch (e) { const box = $('#trend'); if (box && !box.querySelector('.tok')) box.innerHTML = '<div class="empty">Could not load: ' + esc(e.message) + '</div>'; }
+  };
+  await loadTrend(); every(loadTrend, TREND_REFRESH_MS);
 }
 
 /* ---------- token ---------- */
 async function pageToken(mint) {
   view.innerHTML = '<div class="tokpage"><div class="col left" id="tl"></div><div class="col" id="tc"><div class="empty" style="margin:20px">Loading token...</div></div><div class="col right" id="tr"></div></div>';
-  api('/api/trending').then(function (t) { $('#tl').innerHTML = t.map(function (x) { return tokRow(x, x.mint === mint); }).join(''); }).catch(function () {});
+  const loadList = function () { api('/api/trending').then(function (t) { const box = $('#tl'); if (box) box.innerHTML = trendRows(t, mint); }).catch(function () {}); };
+  loadList(); every(loadList, TREND_REFRESH_MS);
   let d;
   try { d = await api('/api/token/' + mint); } catch (e) { $('#tc').innerHTML = '<div class="empty" style="margin:20px">' + esc(e.message) + '</div>'; return; }
   const s = d.snap, r = d.risk;

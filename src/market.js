@@ -57,16 +57,38 @@ exports.search = async function (q) {
   return bestPairs(r.pairs).sort(function (a, b) { return b.liquidity - a.liquidity; }).slice(0, 12);
 };
 
-let trendCache = { t: 0, list: [] };
-exports.trending = async function () {
-  if (Date.now() - trendCache.t < 60000) return trendCache.list;
-  const boosts = await http.getJson(DEX + '/token-boosts/top/v1');
+// Lista "em alta": junta os mais promovidos, os promovidos agora e os perfis mais recentes do DexScreener
+// (3 chamadas), completa os numeros em lote e ordena pelo volume da ultima hora. Todo mundo le a mesma
+// copia, entao o custo nao cresce com o numero de usuarios.
+let trendCache = { t: 0, list: [] }, trendPending = null;
+const TREND_TTL_MS = 30000, TREND_MAX = 40, TREND_MIN_LIQUIDITY = 1000;
+const TREND_SOURCES = ['/token-boosts/top/v1', '/token-boosts/latest/v1', '/token-profiles/latest/v1'];
+
+async function buildTrending() {
   const mints = [];
-  boosts.forEach(function (b) { if (b.chainId === 'solana' && mints.indexOf(b.tokenAddress) < 0) mints.push(b.tokenAddress); });
-  const snaps = await exports.snapshots(mints.slice(0, 30));
-  const list = mints.map(function (m) { return snaps[m]; }).filter(Boolean).slice(0, 24);
-  trendCache = { t: Date.now(), list: list };
-  return list;
+  const lists = await Promise.all(TREND_SOURCES.map(function (p) { return http.getJson(DEX + p).catch(function () { return null; }); }));
+  if (!lists.some(Boolean)) throw new Error('No data');
+  lists.forEach(function (l) {
+    (l || []).forEach(function (b) { if (b && b.chainId === 'solana' && b.tokenAddress && mints.indexOf(b.tokenAddress) < 0) mints.push(b.tokenAddress); });
+  });
+  const snaps = await exports.snapshots(mints.slice(0, 90));
+  return Object.keys(snaps).map(function (k) { return snaps[k]; })
+    .filter(function (s) { return s.liquidity >= TREND_MIN_LIQUIDITY; })
+    .sort(function (a, b) { return b.volume.h1 - a.volume.h1; }).slice(0, TREND_MAX);
+}
+
+exports.trending = async function () {
+  if (Date.now() - trendCache.t < TREND_TTL_MS) return trendCache.list;
+  if (trendPending) return trendPending;
+  trendPending = buildTrending().then(function (list) {
+    trendCache = { t: Date.now(), list: list };
+    return list;
+  }, function (e) {
+    if (!trendCache.list.length) throw e;
+    trendCache.t = Date.now() - TREND_TTL_MS + 10000;   // falhou: mostra a lista antiga e tenta de novo em 10 s
+    return trendCache.list;
+  }).then(function (list) { trendPending = null; return list; }, function (e) { trendPending = null; throw e; });
+  return trendPending;
 };
 
 // res: 1m, 5m, 15m, 1h, 4h, D

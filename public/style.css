@@ -43,6 +43,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .tok { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .tok:hover { background: var(--panel2); }
 .tok.on { background: var(--blue-dim); }
+@keyframes flashUp { from { background: #22c55e45; } to { background: transparent; } }
+@keyframes flashDown { from { background: #ef444445; } to { background: transparent; } }
+.tok.flash-up { animation: flashUp 1.6s ease-out; } .tok.flash-down { animation: flashDown 1.6s ease-out; }
+.livedot { display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: #22c55e; vertical-align: middle; animation: pulse 1.8s ease-in-out infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 #22c55e80; } 50% { opacity: .55; box-shadow: 0 0 0 5px #22c55e00; } }
+@media (prefers-reduced-motion: reduce) { .tok.flash-up, .tok.flash-down, .livedot { animation: none; } }
 .tok img, .ph { width: 30px; height: 30px; border-radius: 50%; background: var(--panel2); flex: none; object-fit: cover; }
 .tok .n { flex: 1; min-width: 0; } .tok .n b { display: block; } .tok .n span { font-size: 12px; color: var(--muted); }
 .tok .r { text-align: right; font-size: 12px; }
